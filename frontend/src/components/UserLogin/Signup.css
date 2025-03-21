@@ -1,0 +1,46 @@
+.signUpcard {
+    background-color: transparent;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    width: 1000px;
+    margin: auto;
+    border: 1px solid #ccc;
+  }
+  
+.signUp-content {
+    padding: 20px;
+    border-radius: 8px;
+  }
+  
+  .auth-heading {
+    color: white;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  
+  .signUplabel,
+  input {
+    font-size: 17px;
+  }
+  
+  .signUplabel {
+    color: white;
+    font-weight: bold;
+    font-size: 17px;
+  }
+  
+  .signUpbutton {
+    background-color: white;
+    color: black;
+    font-size: 16px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    display: block;
+    margin: auto;
+    margin-top: 20px;
+  }
+  

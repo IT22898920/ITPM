@@ -1,0 +1,13 @@
+/* .container {
+    width: 50%;
+    margin: 0 auto;
+    margin-top: 300px;
+  } */
+
+  .input .delete{
+    left : 611px;
+  }
+
+  .select-drop-down .down-arrow svg {
+    left: 130px;
+}
