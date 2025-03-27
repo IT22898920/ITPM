@@ -8,6 +8,7 @@ import warnings
 import os
 import ssl
 import logging
+import urllib.request
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -29,14 +30,31 @@ else:
 nltk_data_path = os.path.join(os.path.expanduser('~'), 'nltk_data')
 os.makedirs(nltk_data_path, exist_ok=True)
 
-# Download all required NLTK resources
-nltk_resources = [
-    'punkt',
-    'averaged_perceptron_tagger',
-    'wordnet',
-    'stopwords',
-    'universal_tagset'
-]
+def setup_punkt_tab():
+    """Create necessary punkt_tab resources manually if they don't exist."""
+    try:
+        punkt_tab_dir = os.path.join(nltk_data_path, 'tokenizers', 'punkt_tab', 'english')
+        os.makedirs(punkt_tab_dir, exist_ok=True)
+        
+        # Check for collocations.tab file
+        collocations_file = os.path.join(punkt_tab_dir, 'collocations.tab')
+        if not os.path.exists(collocations_file):
+            # Create an empty collocations.tab file
+            with open(collocations_file, 'w') as f:
+                f.write('')
+            logger.info("Created empty collocations.tab file")
+        
+        # Create empty punkt.data file if it doesn't exist
+        punkt_data_file = os.path.join(punkt_tab_dir, 'punkt.data')
+        if not os.path.exists(punkt_data_file):
+            with open(punkt_data_file, 'w') as f:
+                f.write('')
+            logger.info("Created empty punkt.data file")
+            
+        return True
+    except Exception as e:
+        logger.error(f"Error setting up punkt_tab resources: {str(e)}")
+        return False
 
 # Add punkt_tab to the resources
 try:
@@ -48,9 +66,22 @@ try:
     with open(os.path.join(punkt_tab_dir, 'punkt.data'), 'w') as f:
         f.write('')
     
+    # Create collocations.tab file
+    with open(os.path.join(punkt_tab_dir, 'collocations.tab'), 'w') as f:
+        f.write('')
+    
     logger.info("Created punkt_tab resource manually")
 except Exception as e:
     logger.error(f"Error creating punkt_tab resource: {str(e)}")
+
+# Download all required NLTK resources
+nltk_resources = [
+    'punkt',
+    'averaged_perceptron_tagger',
+    'wordnet',
+    'stopwords',
+    'universal_tagset'
+]
 
 for resource in nltk_resources:
     try:
@@ -59,9 +90,35 @@ for resource in nltk_resources:
     except Exception as e:
         logger.error(f"Error downloading NLTK resource {resource}: {str(e)}")
 
+def install_googletrans():
+    """Install googletrans package if not available."""
+    try:
+        import googletrans
+        logger.info("Googletrans package is already installed")
+        return True
+    except ImportError:
+        try:
+            logger.warning("Googletrans package not found. Attempting to install...")
+            
+            # Set up SSL context for downloads
+            ssl._create_default_https_context = ssl._create_unverified_context
+            
+            # Try pip install using subprocess
+            import subprocess
+            subprocess.check_call(["pip", "install", "googletrans==4.0.0-rc1"])
+            
+            # Verify installation
+            import googletrans
+            logger.info("Successfully installed googletrans package")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to install googletrans: {str(e)}")
+            return False
+
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})  # For development
 
 def translator(t):
     """Translate any given text (string) into English using Google Translate."""
@@ -83,7 +140,7 @@ def translator(t):
                         return TranslationResult(text)
                 translator = FallbackTranslator()
         result = translator.translate(t, dest='en')
-        logger.info(f"Translation successful: '{t}' → '{result.text}'")
+        logger.info(f"Translation successful: '{t[:100]}...' → '{result.text[:100]}...'")  # Log only first 100 chars
         return result.text
     except Exception as e:
         logger.error(f"Translation error: {str(e)}")
@@ -111,11 +168,22 @@ def sinhalTranslator(words):
         logger.error(f"Sinhala translation error: {str(e)}")
         return words  # Return original words if translation fails
 
-def keywordsExtractorEnglish(text):
-    """Extract top 5 English nouns from the input text."""
+def keywordsExtractorEnglish(text, max_keywords=None):
+    """
+    Extract English nouns from the input text.
+    
+    Parameters:
+    text (str): The input text to extract keywords from
+    max_keywords (int, optional): Maximum number of keywords to return. If None, returns all keywords.
+    
+    Returns:
+    list: List of extracted keywords
+    """
     try:
         # First try using NLTK's word_tokenize
         try:
+            # Make sure punkt_tab resources are available
+            setup_punkt_tab()
             tokens = word_tokenize(text)
         except Exception as tokenize_error:
             # Fallback to simple space-based tokenization if NLTK tokenizer fails
@@ -123,9 +191,21 @@ def keywordsExtractorEnglish(text):
             tokens = text.split()
         
         try:
+            # First try standard POS tagging
             tagged_tokens = pos_tag(tokens)
             # Extract nouns (words tagged with NN, NNS, NNP, NNPS)
             nouns = [word.lower() for word, pos in tagged_tokens if pos.startswith('NN')]
+            
+            # If no nouns found, try universal tagset
+            if not nouns:
+                try:
+                    from nltk.tag import pos_tag_sents
+                    from nltk.tag.util import untag
+                    universal_tagged = pos_tag(tokens, tagset='universal')
+                    nouns = [word.lower() for word, pos in universal_tagged if pos == 'NOUN']
+                except:
+                    # Fallback if universal tagset fails
+                    nouns = [word.lower() for word in tokens if len(word) > 3]
         except Exception as pos_error:
             # Fallback if POS tagging fails: treat all words as potential keywords
             logger.warning(f"POS tagging failed: {str(pos_error)}. Using all words as potential keywords.")
@@ -141,35 +221,50 @@ def keywordsExtractorEnglish(text):
         # Calculate word frequencies
         freq_dist = FreqDist(nouns)
         
-        # Get top 5 keywords
-        top_keywords = freq_dist.most_common(5)
-        logger.info(f"Extracted English keywords: {top_keywords}")
+        # Get keywords based on max_keywords parameter
+        if max_keywords is not None:
+            top_keywords = freq_dist.most_common(max_keywords)
+        else:
+            # Get all keywords with their frequencies
+            top_keywords = freq_dist.most_common()
+            
+        logger.info(f"Extracted {len(top_keywords)} English keywords")
         
         return [keyword[0] for keyword in top_keywords]
     except Exception as e:
         logger.error(f"Error extracting English keywords: {str(e)}")
-        # Last resort fallback - return a few words from the text
+        # Last resort fallback - return words from the text
         try:
             words = text.split()
-            # Return up to 5 words with length > 3
-            return [word.lower() for word in words if len(word) > 3][:5]
+            # Return words with length > 3, limited by max_keywords if specified
+            filtered_words = [word.lower() for word in words if len(word) > 3]
+            if max_keywords is not None:
+                return filtered_words[:max_keywords]
+            return filtered_words
         except:
             return []
 
-def keywordExtractorFromSinhala(text):
+def keywordExtractorFromSinhala(text, max_keywords=None):
     """
     1. Translate Sinhala text to English
     2. Extract English nouns
     3. Translate top English nouns back to Sinhala
+    
+    Parameters:
+    text (str): The Sinhala text to extract keywords from
+    max_keywords (int, optional): Maximum number of keywords to return. If None, returns all keywords.
+    
+    Returns:
+    list: List of Sinhala keywords
     """
     try:
         # First, translate from Sinhala to English
         english_text = translator(text)
-        logger.info(f"Translated to English: '{english_text}'")
+        logger.info(f"Translated to English: '{english_text[:100]}...'")  # Log only first 100 chars
         
         # Extract English keywords
-        english_keywords = keywordsExtractorEnglish(english_text)
-        logger.info(f"Extracted keywords: {english_keywords}")
+        english_keywords = keywordsExtractorEnglish(english_text, max_keywords)
+        logger.info(f"Extracted {len(english_keywords)} keywords")
         
         # Convert back to Sinhala
         sinhala_keywords = sinhalTranslator(english_keywords)
@@ -183,7 +278,7 @@ def keywordExtractorFromSinhala(text):
 @app.route('/extract_keywords_sinhala', methods=['POST'])
 def extract_keywords_sinhala():
     """
-    POST JSON: {"text": "සිංහල වාක්‍යයක්"}
+    POST JSON: {"text": "සිංහල වාක්‍යයක්", "max_keywords": 10}
     Returns: {"keywords": [...]}
     """
     if request.method == 'POST':
@@ -198,8 +293,11 @@ def extract_keywords_sinhala():
                 logger.warning("Text not provided in request")
                 return jsonify({'error': 'Text not provided in the request body'}), 400
             
-            logger.info(f"Processing Sinhala text: '{text}'")
-            keywords = keywordExtractorFromSinhala(text)
+            # Get max_keywords parameter if provided, otherwise use None to get all keywords
+            max_keywords = data.get('max_keywords', None)
+            logger.info(f"Processing Sinhala text with max_keywords={max_keywords}")
+            
+            keywords = keywordExtractorFromSinhala(text, max_keywords)
             
             return jsonify({'keywords': keywords})
         except Exception as e:
@@ -209,7 +307,7 @@ def extract_keywords_sinhala():
 @app.route('/extract_keywords', methods=['POST'])
 def extract_keywords_english():
     """
-    POST JSON: {"text": "This is an example sentence."}
+    POST JSON: {"text": "This is an example sentence.", "max_keywords": 10}
     Returns: {"keywords": [...]}
     """
     if request.method == 'POST':
@@ -224,8 +322,11 @@ def extract_keywords_english():
                 logger.warning("Text not provided in request")
                 return jsonify({'error': 'Text not provided in the request body'}), 400
             
-            logger.info(f"Processing English text: '{text}'")
-            keywords = keywordsExtractorEnglish(text)
+            # Get max_keywords parameter if provided, otherwise use None to get all keywords
+            max_keywords = data.get('max_keywords', None)
+            logger.info(f"Processing English text with max_keywords={max_keywords}")
+            
+            keywords = keywordsExtractorEnglish(text, max_keywords)
             
             return jsonify({'keywords': keywords})
         except Exception as e:
@@ -238,12 +339,16 @@ def home():
     return jsonify({
         'status': 'API is running',
         'endpoints': {
-            '/extract_keywords': 'Extract keywords from English text',
-            '/extract_keywords_sinhala': 'Extract keywords from Sinhala text'
+            '/extract_keywords': 'Extract keywords from English text (POST with {"text": "...", "max_keywords": optional_number})',
+            '/extract_keywords_sinhala': 'Extract keywords from Sinhala text (POST with {"text": "...", "max_keywords": optional_number})'
         }
     })
 
 if __name__ == '__main__':
+    # Set up required resources
+    setup_punkt_tab()
+    install_googletrans()
+    
     # Check if NLTK resources are properly loaded
     logger.info("Verifying NLTK resources...")
     try:

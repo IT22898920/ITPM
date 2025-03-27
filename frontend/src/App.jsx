@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
+import { useUserStore } from './stores/userStore';
 import Translator from './components/Translator';
 import Header from './components/Header';
 import Features from './components/Features';
@@ -34,6 +35,13 @@ function AnimatedRoutes() {
   const location = useLocation();
   const [showLoginModal, setShowLoginModal] = useState(false);
   const isAuthenticated = useAdminStore(state => state.isAuthenticated);
+  const initAuth = useUserStore(state => state.initAuth);
+
+  useEffect(() => {
+    // Initialize Firebase auth listener
+    const unsubscribe = initAuth();
+    return () => unsubscribe(); // Cleanup on unmount
+  }, [initAuth]);
 
   return (
     <>
